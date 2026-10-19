@@ -16,10 +16,24 @@ function ss_() {
   return SpreadsheetApp.getActiveSpreadsheet();
 }
 
+/**
+ * Last row with a value in column A. getLastRow() alone is fooled by
+ * pre-filled cells such as unchecked checkboxes further down the sheet.
+ */
+function lastRow_(sh) {
+  const last = sh.getLastRow();
+  if (last < 2) return last;
+  const colA = sh.getRange(2, 1, last - 1, 1).getValues();
+  for (let i = colA.length - 1; i >= 0; i--) {
+    if (colA[i][0] !== '' && colA[i][0] !== null) return i + 2;
+  }
+  return 1;
+}
+
 function loadTable_(name) {
   const sh = ss_().getSheetByName(name);
   const headers = TABLES[name];
-  const last = sh.getLastRow();
+  const last = lastRow_(sh);
   const values = last > 1 ? sh.getRange(2, 1, last - 1, headers.length).getValues() : [];
   const rows = values.map((r, i) => {
     const rec = { _row: i + 2 };
@@ -39,7 +53,7 @@ function saveRow_(table, rec) {
 
 function appendRows_(table, recs) {
   if (!recs.length) return;
-  const start = table.sh.getLastRow() + 1;
+  const start = lastRow_(table.sh) + 1;
   table.sh.getRange(start, 1, recs.length, table.headers.length)
     .setValues(recs.map(rec => toValues_(table, rec)));
   recs.forEach((rec, i) => { rec._row = start + i; table.rows.push(rec); });
@@ -96,8 +110,6 @@ function setup() {
   });
   const appts = ss.getSheetByName('Appointments');
   appts.getRange(2, TABLES.Appointments.indexOf('startMs') + 1, appts.getMaxRows() - 1, 1).setNumberFormat('0');
-  const clients = ss.getSheetByName('Clients');
-  clients.getRange(2, TABLES.Clients.indexOf('active') + 1, clients.getMaxRows() - 1, 1).insertCheckboxes();
 
   const sheet1 = ss.getSheetByName('Sheet1') || ss.getSheetByName('גיליון1');
   if (sheet1 && ss.getSheets().length > 1) ss.deleteSheet(sheet1);

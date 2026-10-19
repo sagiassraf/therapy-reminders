@@ -276,7 +276,11 @@ function addClient() {
     active: true,
     created: new Date(),
   };
-  withLock_(() => appendRows_(loadTable_('Clients'), [client]));
+  withLock_(() => {
+    const table = loadTable_('Clients');
+    appendRows_(table, [client]);
+    table.sh.getRange(client._row, TABLES.Clients.indexOf('active') + 1).insertCheckboxes();
+  });
   ui.alert('קוד ההפעלה של ' + client.displayName + ':\n\n' + client.id + '.' + client.secret +
     '\n\nשלחו את הקוד למטפל/ת יחד עם קישור ההעתקה של גיליון המטפל.');
 }

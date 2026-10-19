@@ -90,8 +90,12 @@ const table = n => ctx.loadTable_(n).rows;
 // --- setup + client
 ctx.setup();
 assert(props.INTERNAL_TOKEN && props.INTERNAL_TOKEN.startsWith('k'));
+// Unchecked checkboxes down column E make getLastRow() report row 1000; rows must still start at 2.
+for (let i = 1; i < 1000; i++) sheets.Clients.data[i] = ['', '', '', '', false, ''];
 const client = { id: 'kclient1', displayName: 'דנה לוי', therapistPhone: '972509998888', secret: 'ksecret', active: true, created: new FakeDate() };
 ctx.appendRows_(ctx.loadTable_('Clients'), [client]);
+assert.strictEqual(client._row, 2, 'client must land in row 2 despite checkboxes below');
+assert.strictEqual(ctx.loadTable_('Clients').rows.length, 1);
 
 // --- sync
 const evA = { eventId: 'A@google.com', startMs: NOW + 30 * H, name: 'יוסי כהן', phone: '+972 50-123-4567' }; // far ahead
