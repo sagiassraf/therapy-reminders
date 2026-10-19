@@ -1,0 +1,14 @@
+{
+  "name": "therapy-reminders",
+  "version": "1.0.0",
+  "private": true,
+  "description": "WhatsApp appointment reminders for therapists and coaches (Google Apps Script + WhatsApp Cloud API + Cloudflare Workers)",
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "test": "node tests/central.test.cjs && node tests/connector.test.cjs && node tests/worker.test.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
