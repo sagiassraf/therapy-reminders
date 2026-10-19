@@ -1,0 +1,10 @@
+# Local tooling
+node_modules/
+.wrangler/
+.clasp.json
+.clasprc.json
+
+# Never commit secrets
+.env
+.dev.vars
+*.secret

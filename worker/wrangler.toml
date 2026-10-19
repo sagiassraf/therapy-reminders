@@ -1,0 +1,6 @@
+name = "therapy-reminders-webhook"
+main = "worker.js"
+compatibility_date = "2025-06-01"
+
+# Secrets are set with:  npx wrangler secret put VERIFY_TOKEN   (and APP_SECRET, CENTRAL_URL, INTERNAL_TOKEN)
+# or in the Cloudflare dashboard: Worker -> Settings -> Variables and Secrets.
