@@ -150,11 +150,11 @@ assert.strictEqual(table('Appointments').find(x => x.id === aId).status, 'cancel
 const newMsgs = sent.slice(before);
 assert.strictEqual(newMsgs.length, 2);
 assert.strictEqual(newMsgs[0].type, 'text');
-assert.strictEqual(newMsgs[1].template.name, 'therapist_cancel_alert');
+assert.strictEqual(newMsgs[1].template.name, 'therapist_alert');
 assert.strictEqual(newMsgs[1].to, '972509998888');
 // duplicate webhook delivery -> no second alert
 tap('972501234567', 'x:' + aId);
-assert.strictEqual(sent.filter(m => m.template && m.template.name === 'therapist_cancel_alert').length, 1);
+assert.strictEqual(sent.filter(m => m.template && m.template.name === 'therapist_alert').length, 1);
 // wrong phone can't touch it
 tap('972500000000', 'c:' + aId);
 assert.strictEqual(table('Appointments').find(x => x.id === aId).status, 'cancelled');
@@ -186,6 +186,37 @@ tap('972541234567', 'c:' + dId);
 r = sync([moved]);
 assert.strictEqual(r.statuses[0].status, 'confirmed');
 console.log('✓ confirm reflected back to connector');
+
+// reschedule request: client reply + therapist alert with reason, no more reminders
+const evR = { eventId: 'R@google.com', startMs: NOW + 30 * H, name: 'נועה', phone: '0551234567' };
+sync([moved, evR]);
+const rId = table('Appointments').find(x => x.eventId === 'R@google.com').id;
+let k = sent.length;
+tap('972551234567', 'r:' + rId);
+assert.strictEqual(table('Appointments').find(x => x.id === rId).status, 'reschedule');
+assert.strictEqual(sent.length - k, 2);
+assert.match(sent[k].text.body, /מועד חדש/);
+assert.strictEqual(sent[k + 1].template.name, 'therapist_alert');
+assert.match(sent[k + 1].template.components[0].parameters[3].text, /לשנות מועד/);
+NOW = evR.startMs - 50 * MIN;
+k = sent.length;
+ctx.sendDueReminders();
+assert.strictEqual(sent.filter((m, i) => i >= k && m.to === '972551234567').length, 0, 'no reminder after reschedule request');
+console.log('✓ reschedule request: alert with reason, reminders stop');
+
+// 1h template carries confirm / cancel / late payloads; "late" alerts the therapist
+const evL = { eventId: 'L@google.com', startMs: NOW + 62 * MIN, name: 'עמית', phone: '0561234567' };
+sync([evL], { windowStart: NOW, windowEnd: NOW + 48 * H });
+ctx.sendDueReminders();
+const m1h = sent[sent.length - 1];
+assert.strictEqual(m1h.template.name, 'reminder_1h');
+const lId = table('Appointments').find(x => x.eventId === 'L@google.com').id;
+assert.deepStrictEqual(m1h.template.components.slice(1).map(c => c.parameters[0].payload), ['c:' + lId, 'x:' + lId, 'l:' + lId]);
+k = sent.length;
+tap('972561234567', 'l:' + lId);
+assert.strictEqual(table('Appointments').find(x => x.id === lId).status, 'late');
+assert.match(sent[k + 1].template.components[0].parameters[3].text, /מאחר/);
+console.log('✓ late button: 3 payloads on 1h template, therapist alerted');
 
 // free text -> "not monitored" once
 const t0 = sent.length;

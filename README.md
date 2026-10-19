@@ -50,6 +50,7 @@ flowchart LR
 | Booked at least 23h ahead | 24h reminder, then 1h reminder |
 | Booked less than 23h ahead | 1h reminder only |
 | Client tapped "Cancel" | No more reminders; ❌ in calendar title; therapist alerted |
+| Client asked to reschedule, or is running late | 🔄 or ⏰ in calendar title; therapist alerted with the reason |
 | Event moved or deleted | Reminders follow the new time, or are dropped |
 | Title doesn't match a contact | No message; shown as "no phone" in the therapist's sheet. A phone number in the event description also works |
 | Client sends free text | One auto-reply (at most every 6h) with the therapist's direct number |
@@ -77,7 +78,7 @@ The tests cover:
 1. One-time setup takes about an hour: Google, Meta, Cloudflare. See [docs/01-setup.md](docs/01-setup.md) (Hebrew).
 2. Each new therapist takes about five minutes. See [docs/02-onboard-client.md](docs/02-onboard-client.md) (Hebrew).
 
-Required WhatsApp templates (Utility category): `reminder_24h`, `reminder_1h` and `therapist_cancel_alert`. Their exact text is in the setup guide.
+Required WhatsApp templates (Utility category): `reminder_24h`, `reminder_1h` and `therapist_alert`. Create them with `npm run templates` ([tools/create-templates.mjs](tools/create-templates.mjs)), which reads credentials from a git-ignored `.env`.
 
 ## Privacy
 

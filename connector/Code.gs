@@ -10,11 +10,13 @@ const CENTRAL_URL = 'PASTE_CENTRAL_WEB_APP_URL_HERE';
 const H = 60 * 60 * 1000;
 const WINDOW_HOURS = 48;
 const STATUS_SHEET = 'פגישות קרובות';
-const PREFIX = { confirmed: '✅ ', cancelled: '❌ ' };
+const PREFIX = { confirmed: '✅ ', cancelled: '❌ ', reschedule: '🔄 ', late: '⏰ ' };
 const STATUS_HE = {
   pending: 'ממתין לתשובה',
   confirmed: 'אישר/ה ✅',
   cancelled: 'ביטל/ה ❌',
+  reschedule: 'ביקש/ה שינוי מועד 🔄',
+  late: 'מאחר/ת ⏰',
   no_phone: 'לא נמצא טלפון ⚠️',
 };
 
@@ -229,7 +231,7 @@ function normalizeName_(s) {
 }
 
 function stripPrefix_(title) {
-  return String(title || '').replace(/^(\s*(✅|❌)\s*)+/u, '');
+  return String(title || '').replace(/^(\s*(✅|❌|🔄|⏰)\s*)+/u, '');
 }
 
 /** Fallback: an Israeli mobile number written in the event description. */

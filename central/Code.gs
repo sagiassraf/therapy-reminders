@@ -16,6 +16,15 @@ const REMINDER_1H_WINDOW = 65 * MIN;
 // A booking made less than this before the meeting skips the day-before reminder.
 const MIN_LEAD_FOR_24H = 23 * H;
 
+// Quick-reply payload prefix -> appointment status. Button order per template:
+//   reminder_24h: confirm, cancel, reschedule     reminder_1h: confirm, cancel, late
+const REPLY_STATUS = { c: 'confirmed', x: 'cancelled', r: 'reschedule', l: 'late' };
+const ALERT_TEXT = {
+  cancelled: 'ביטל/ה את הפגישה ❌',
+  reschedule: 'ביקש/ה לשנות מועד 🔄',
+  late: 'מאחר/ת בכמה דקות ⏰',
+};
+
 function onOpen() {
   SpreadsheetApp.getUi().createMenu('תזכורות')
     .addItem('הוספת מטפל/ת', 'addClient')
@@ -153,7 +162,8 @@ function sendReminder_(template, appt, client) {
   const params = template === 'reminder_24h'
     ? [firstName_(appt.name), client.displayName, dayText_(d), timeText_(d)]
     : [firstName_(appt.name), client.displayName, timeText_(d)];
-  sendTemplate_(String(appt.phone), template, params, ['c:' + appt.id, 'x:' + appt.id]);
+  const buttons = template === 'reminder_24h' ? ['c', 'x', 'r'] : ['c', 'x', 'l'];
+  sendTemplate_(String(appt.phone), template, params, buttons.map(b => b + ':' + appt.id));
 }
 
 // ---------------------------------------------------------------- webhook
@@ -184,9 +194,9 @@ function handleIncoming_(m) {
   if (m.type === 'button' && m.button) payload = m.button.payload || '';
   else if (m.type === 'interactive' && m.interactive && m.interactive.button_reply) payload = m.interactive.button_reply.id || '';
 
-  const match = /^([cx]):(\w+)$/.exec(payload);
+  const match = /^([cxrl]):(\w+)$/.exec(payload);
   if (match) {
-    handleReply_(m.from, match[1] === 'c' ? 'confirmed' : 'cancelled', match[2]);
+    handleReply_(m.from, REPLY_STATUS[match[1]], match[2]);
   } else if (['text', 'audio', 'image', 'video', 'document'].includes(m.type)) {
     replyNotMonitored_(m.from);
   }
@@ -211,18 +221,21 @@ function handleReply_(from, status, apptId) {
   const client = findClient_(appt.clientId);
   const d = new Date(Number(appt.startMs));
   const when = `ביום ${dayText_(d)} בשעה ${timeText_(d)}`;
+  const replies = {
+    confirmed: `תודה ${firstName_(appt.name)}, ההגעה אושרה ✅\nנתראה ${when}.`,
+    cancelled: `קיבלנו, הפגישה ${when} בוטלה. ${client.displayName} קיבל/ה עדכון.`,
+    reschedule: `קיבלנו 🙏 ${client.displayName} יחזור/תחזור אליך לתיאום מועד חדש.`,
+    late: `תודה על העדכון, ${client.displayName} יודע/ת שתגיע/י בעוד כמה דקות.`,
+  };
+  sendText_(from, replies[status]);
 
-  if (status === 'confirmed') {
-    sendText_(from, `תודה ${firstName_(appt.name)}, ההגעה אושרה ✅\nנתראה ${when}.`);
-    return;
-  }
-  sendText_(from, `קיבלנו, הפגישה ${when} בוטלה. ${client.displayName} קיבל/ה עדכון.`);
-  if (prev !== 'cancelled' && client.therapistPhone) {
-    try {
-      sendTemplate_(String(client.therapistPhone), 'therapist_cancel_alert', [appt.name, dayText_(d), timeText_(d)], []);
-    } catch (err) {
-      log_('ERROR', `Cancel alert to ${client.displayName}: ${err.message}`);
-    }
+  // The therapist hears about everything except a plain confirmation, once per change.
+  if (status === 'confirmed' || prev === status || !client.therapistPhone) return;
+  try {
+    sendTemplate_(String(client.therapistPhone), 'therapist_alert',
+      [appt.name, dayText_(d), timeText_(d), ALERT_TEXT[status]], []);
+  } catch (err) {
+    log_('ERROR', `Alert to ${client.displayName}: ${err.message}`);
   }
 }
 
@@ -273,7 +286,7 @@ function testSend() {
   const phone = normalizePhone_(PropertiesService.getScriptProperties().getProperty('TEST_PHONE'));
   if (!phone) throw new Error('Set TEST_PHONE in script properties first');
   const d = new Date(Date.now() + DAY);
-  const res = sendTemplate_(phone, 'reminder_24h', ['ישראל', 'דנה לוי', dayText_(d), timeText_(d)], ['c:test', 'x:test']);
+  const res = sendTemplate_(phone, 'reminder_24h', ['ישראל', 'דנה לוי', dayText_(d), timeText_(d)], ['c:test', 'x:test', 'r:test']);
   Logger.log(JSON.stringify(res));
 }
 

@@ -2,7 +2,7 @@
  * WhatsApp Cloud API (Meta). Script properties used:
  *   WA_TOKEN       permanent System User access token
  *   WA_PHONE_ID    Phone number ID of the business number
- *   GRAPH_VERSION  optional, default v23.0
+ *   GRAPH_VERSION  optional, default v25.0
  *   TEMPLATE_LANG  optional, default he
  */
 
@@ -14,7 +14,7 @@ function waConfig_() {
   return {
     token,
     phoneId,
-    version: p.getProperty('GRAPH_VERSION') || 'v23.0',
+    version: p.getProperty('GRAPH_VERSION') || 'v25.0',
     lang: p.getProperty('TEMPLATE_LANG') || 'he',
   };
 }
