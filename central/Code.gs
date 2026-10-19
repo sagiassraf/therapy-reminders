@@ -23,6 +23,7 @@ const ALERT_TEXT = {
   cancelled: 'ביטל/ה את הפגישה ❌',
   reschedule: 'ביקש/ה לשנות מועד 🔄',
   late: 'מאחר/ת בכמה דקות ⏰',
+  no_phone: '⚠️ לא נמצא איש קשר בשם הזה, לכן לא תישלח תזכורת. תקנו את שם הפגישה כך שיהיה זהה לשם באנשי הקשר',
 };
 
 function onOpen() {
@@ -61,7 +62,8 @@ function json_(obj) {
 // ---------------------------------------------------------------- sync
 
 function handleSync_(body) {
-  const client = findClient_(body.clientId);
+  const clientsTable = loadTable_('Clients');
+  const client = clientsTable.rows.find(c => String(c.id) === String(body.clientId));
   if (!client || client.secret !== body.secret) return { ok: false, error: 'unauthorized' };
   if (!isActive_(client)) return { ok: false, error: 'inactive' };
 
@@ -69,8 +71,10 @@ function handleSync_(body) {
   const winEnd = Number(body.windowEnd);
   const inWindow = r => Number(r.startMs) >= winStart && Number(r.startMs) < winEnd;
   const now = new Date();
+  // On the very first sync everything is "new"; the activation screen already lists unmatched events.
+  const firstSync = !client.lastSync;
 
-  return withLock_(() => {
+  const result = withLock_(() => {
     const t = loadTable_('Appointments');
     const mine = t.rows.filter(r => String(r.clientId) === client.id);
     const byKey = {};
@@ -110,14 +114,33 @@ function handleSync_(body) {
     });
     appendRows_(t, added);
 
+    client.lastSync = now;
+    saveRow_(clientsTable, client);
+
     const statuses = t.rows
       .filter(r => String(r.clientId) === client.id && inWindow(r) && r.status !== 'deleted')
       .map(r => ({
         eventId: r.eventId, startMs: Number(r.startMs), status: r.status,
         sent24: !!r.sent24, sent1h: !!r.sent1h,
       }));
-    return { ok: true, statuses };
+    return { ok: true, statuses, unmatched: firstSync ? [] : added.filter(a => a.status === 'no_phone') };
   });
+
+  // Tell the therapist right away about a new meeting we can't remind (once per meeting).
+  result.unmatched.forEach(a => alertUnmatched_(client, a));
+  delete result.unmatched;
+  return result;
+}
+
+function alertUnmatched_(client, appt) {
+  if (!client.therapistPhone) return;
+  const d = new Date(Number(appt.startMs));
+  try {
+    sendTemplate_(String(client.therapistPhone), 'therapist_alert',
+      [appt.name || 'ללא שם', dayText_(d), timeText_(d), ALERT_TEXT.no_phone], []);
+  } catch (err) {
+    log_('ERROR', `No-phone alert to ${client.displayName}: ${err.message}`);
+  }
 }
 
 // ---------------------------------------------------------------- reminders

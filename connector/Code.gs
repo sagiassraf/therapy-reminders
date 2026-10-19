@@ -49,11 +49,22 @@ function activate() {
     ui.alert('ההפעלה נכשלה: ' + err.message);
     return;
   }
-  removeTriggers_();
-  ScriptApp.newTrigger('sync').timeBased().everyMinutes(10).create();
+  installTriggers_();
   ui.alert('התזכורות הופעלו 🎉\n\nיומן: ' + result.calendar + '\nפגישות ב-48 השעות הקרובות: ' + result.total +
     '\nמתוכן עם טלפון: ' + result.withPhone +
-    '\n\nפגישה שהשם שלה לא תואם לאיש קשר לא תקבל תזכורת. אפשר לראות הכול בלשונית "' + STATUS_SHEET + '".');
+    '\n\nשם הפגישה צריך להיות השם של הלקוח כפי שהוא שמור באנשי הקשר. אם לא יימצא איש קשר, תקבלו התראה בוואטסאפ.' +
+    '\nאירוע אישי באותו יומן? התחילו את השם שלו בנקודה, למשל: .רופא שיניים');
+}
+
+/** Sync on every calendar change (usually within seconds), plus every 10 minutes as a backup. */
+function installTriggers_() {
+  removeTriggers_();
+  ScriptApp.newTrigger('sync').timeBased().everyMinutes(10).create();
+  ScriptApp.newTrigger('onCalendarChange').forUserCalendar(getCalendar_().getId()).onEventUpdated().create();
+}
+
+function onCalendarChange() {
+  sync();
 }
 
 function chooseCalendar() {
@@ -67,7 +78,10 @@ function chooseCalendar() {
     ui.alert('מספר לא תקין.');
     return;
   }
-  PropertiesService.getScriptProperties().setProperty('CALENDAR_ID', cal.getId());
+  const props = PropertiesService.getScriptProperties();
+  props.setProperty('CALENDAR_ID', cal.getId());
+  // Already active: move the calendar-change trigger to the new calendar.
+  if (props.getProperty('CLIENT_ID') && ScriptApp.getProjectTriggers().length) installTriggers_();
   ui.alert('נבחר היומן: ' + cal.getName());
 }
 
@@ -88,31 +102,41 @@ function removeTriggers_() {
 
 // ---------------------------------------------------------------- sync
 
+function getCalendar_() {
+  const calId = PropertiesService.getScriptProperties().getProperty('CALENDAR_ID');
+  return (calId && CalendarApp.getCalendarById(calId)) || CalendarApp.getDefaultCalendar();
+}
+
+/** Calendar triggers can fire in bursts; one sync at a time. */
 function sync() {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(60000);
+  try {
+    return doSync_();
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function doSync_() {
   const props = PropertiesService.getScriptProperties();
   const clientId = props.getProperty('CLIENT_ID');
   const secret = props.getProperty('SECRET');
   if (!clientId) throw new Error('התזכורות עדיין לא הופעלו');
 
-  const calId = props.getProperty('CALENDAR_ID');
-  const cal = (calId && CalendarApp.getCalendarById(calId)) || CalendarApp.getDefaultCalendar();
+  const cal = getCalendar_();
   const now = new Date();
   const end = new Date(now.getTime() + WINDOW_HOURS * H);
-  const contacts = getContacts_();
 
-  const items = cal.getEvents(now, end)
-    .filter(e => !e.isAllDayEvent() && e.getStartTime() >= now)
-    .map(e => {
-      const title = stripPrefix_(e.getTitle());
-      const contact = contacts[normalizeName_(title)];
-      return {
-        event: e,
-        eventId: e.getId(),
-        startMs: e.getStartTime().getTime(),
-        name: contact ? contact.name : title,
-        phone: contact ? contact.phone : findPhone_(e.getDescription()),
-      };
-    });
+  const events = cal.getEvents(now, end)
+    .filter(e => !e.isAllDayEvent() && e.getStartTime() >= now && !isPersonal_(e.getTitle()));
+  let contacts = getContacts_(false);
+  let items = events.map(e => toItem_(e, contacts));
+  // A contact added a minute ago isn't in the 30-minute cache yet - re-read before reporting "no phone".
+  if (items.some(it => !it.phone)) {
+    contacts = getContacts_(true);
+    items = events.map(e => toItem_(e, contacts));
+  }
 
   const res = UrlFetchApp.fetch(CENTRAL_URL, {
     method: 'post',
@@ -146,6 +170,23 @@ function sync() {
 
   writeStatusSheet_(items);
   return { total: items.length, withPhone: items.filter(i => i.phone).length, calendar: cal.getName() };
+}
+
+function toItem_(event, contacts) {
+  const title = stripPrefix_(event.getTitle());
+  const contact = contacts[normalizeName_(title)];
+  return {
+    event,
+    eventId: event.getId(),
+    startMs: event.getStartTime().getTime(),
+    name: contact ? contact.name : title,
+    phone: contact ? contact.phone : findPhone_(event.getDescription()),
+  };
+}
+
+/** Personal events in a shared calendar start with a dot, e.g. ".dentist". */
+function isPersonal_(title) {
+  return /^\s*\./.test(String(title || ''));
 }
 
 function markTitle_(event, prefix) {
@@ -183,10 +224,10 @@ function writeStatusSheet_(items) {
 
 // ---------------------------------------------------------------- contacts
 
-/** Map of normalized name -> {name, phone}, cached for 30 minutes. */
-function getContacts_() {
+/** Map of normalized name -> {name, phone}, cached for 30 minutes unless `fresh`. */
+function getContacts_(fresh) {
   const cache = CacheService.getScriptCache();
-  const hit = cache.get('contacts');
+  const hit = fresh ? null : cache.get('contacts');
   if (hit) return JSON.parse(hit);
 
   const map = {};

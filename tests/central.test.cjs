@@ -111,7 +111,26 @@ assert.strictEqual(r.statuses.length, 3);
 let rows = table('Appointments');
 assert.strictEqual(rows.find(x => x.eventId === 'A@google.com').phone, '972501234567');
 assert.strictEqual(rows.find(x => x.eventId === 'C@google.com').status, 'no_phone');
+assert.strictEqual(sent.length, 0, 'first sync must not alert about unmatched events');
 console.log('✓ sync: insert, phone normalization, no_phone, auth');
+
+// A new unmatched meeting after the first sync -> immediate WhatsApp alert to the therapist, once.
+const evU = { eventId: 'U@google.com', startMs: NOW + 20 * H, name: 'ראובן', phone: '' };
+sync([evA, evB, evC, evU]);
+assert.strictEqual(sent.length, 1);
+assert.strictEqual(sent[0].to, '972509998888');
+assert.strictEqual(sent[0].template.name, 'therapist_alert');
+const up = sent[0].template.components[0].parameters.map(x => x.text);
+assert.strictEqual(up[0], 'ראובן');
+assert.match(up[3], /לא נמצא איש קשר/);
+sync([evA, evB, evC, evU]);
+assert.strictEqual(sent.length, 1, 'no repeat alert for the same meeting');
+// Therapist fixes the title -> it gets a phone and becomes a normal pending appointment.
+sync([evA, evB, evC, Object.assign({}, evU, { name: 'ראובן כהן', phone: '0581234567' })]);
+assert.strictEqual(table('Appointments').find(x => x.eventId === 'U@google.com').status, 'pending');
+sync([evA, evB, evC]); // drop it again so later counts stay simple
+sent.length = 0;
+console.log('✓ unmatched meeting: one immediate alert, cleared after fix');
 
 // --- reminders at T+0: nothing due (A is 30h away, B is 3h away but booked late -> no 24h)
 ctx.sendDueReminders();

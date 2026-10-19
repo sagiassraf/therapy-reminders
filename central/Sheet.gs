@@ -3,7 +3,7 @@
  */
 
 const TABLES = {
-  Clients: ['id', 'displayName', 'therapistPhone', 'secret', 'active', 'created'],
+  Clients: ['id', 'displayName', 'therapistPhone', 'secret', 'active', 'created', 'lastSync'],
   Appointments: ['id', 'clientId', 'eventId', 'startMs', 'start', 'name', 'phone', 'status',
     'firstSeen', 'sent24', 'sent1h', 'replyAt', 'updated'],
   Log: ['time', 'level', 'message'],

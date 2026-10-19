@@ -52,7 +52,8 @@ flowchart LR
 | Client tapped "Cancel" | No more reminders; ❌ in calendar title; therapist alerted |
 | Client asked to reschedule, or is running late | 🔄 or ⏰ in calendar title; therapist alerted with the reason |
 | Event moved or deleted | Reminders follow the new time, or are dropped |
-| Title doesn't match a contact | No message; shown as "no phone" in the therapist's sheet. A phone number in the event description also works |
+| Title doesn't match a contact | No message to the client; the therapist gets an immediate WhatsApp alert (calendar trigger, usually within seconds) to fix the title |
+| Title starts with a dot (".dentist") | Treated as a personal event and ignored |
 | Client sends free text | One auto-reply (at most every 6h) with the therapist's direct number |
 
 ## Tests

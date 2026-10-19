@@ -14,4 +14,8 @@ assert.strictEqual(ctx.stripPrefix_('✅ ❌ יוסי כהן'), 'יוסי כהן
 assert.strictEqual(ctx.findPhone_('טל: 050-123-4567 תודה'), '050-123-4567');
 assert.strictEqual(ctx.findPhone_('+972 52 123 4567'), '+972 52 123 4567');
 assert.strictEqual(ctx.findPhone_('no phone here'), '');
+assert.strictEqual(ctx.isPersonal_('.רופא שיניים'), true);
+assert.strictEqual(ctx.isPersonal_('  .gym'), true);
+assert.strictEqual(ctx.isPersonal_('יוסי כהן'), false);
+assert.strictEqual(ctx.isPersonal_('✅ יוסי'), false);
 console.log('✓ connector helpers\n\nALL CONNECTOR TESTS PASSED');
