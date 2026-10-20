@@ -81,6 +81,15 @@ The tests cover:
 
 Required WhatsApp templates (Utility category): `reminder_24h`, `reminder_1h` and `therapist_alert`. Create them with `npm run templates` ([tools/create-templates.mjs](tools/create-templates.mjs)), which reads credentials from a git-ignored `.env`.
 
+## Deploying changes
+
+Both Apps Script projects are deployed with [clasp](https://github.com/google/clasp). Script IDs and the web app URL live in the git-ignored `.env`:
+
+```bash
+npm run deploy:central     # push + bump the existing web app deployment (URL stays the same)
+npm run deploy:connector   # build the therapist template with the real URL injected, then push
+```
+
 ## Privacy
 
 Only a name, phone number and appointment time are stored, never any clinical content. Past appointments are deleted automatically after 3 days.
