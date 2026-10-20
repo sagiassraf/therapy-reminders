@@ -7,6 +7,8 @@
   "license": "MIT",
   "scripts": {
     "templates": "node tools/create-templates.mjs",
+    "deploy:central": "node tools/deploy.mjs central",
+    "deploy:connector": "node tools/deploy.mjs connector",
     "test": "node tests/central.test.cjs && node tests/connector.test.cjs && node tests/worker.test.mjs"
   },
   "engines": {
