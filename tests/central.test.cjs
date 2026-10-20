@@ -64,7 +64,7 @@ const ctx = {
   SpreadsheetApp: { getActiveSpreadsheet: () => ss },
   LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) },
   PropertiesService: { getScriptProperties: () => ({
-    getProperty: k => props[k] || null, setProperty: (k, v) => { props[k] = v; },
+    getProperty: k => props[k] || null, setProperty: (k, v) => { props[k] = v; }, getProperties: () => ({ ...props }),
   }) },
   CacheService: { getScriptCache: () => ({ get: k => cache[k] || null, put: (k, v) => { cache[k] = v; } }) },
   Utilities: { getUuid: () => crypto.randomUUID(), formatDate },
@@ -265,6 +265,30 @@ NOW += 10 * 24 * H;
 ctx.cleanup();
 assert.strictEqual(table('Appointments').length, 0);
 console.log('✓ cleanup');
+
+// admin endpoint: auth, whitelist, never echoes values
+assert.strictEqual(post({ type: 'admin', token: 'nope', set: { WA_TOKEN: 'x' } }).ok, false);
+let adm = post({ type: 'admin', token: props.INTERNAL_TOKEN, set: { WA_TOKEN: 'newtok', INTERNAL_TOKEN: 'hijack', TEMPLATE_SET: 'legacy' } });
+assert.deepStrictEqual(adm.updated, ['WA_TOKEN', 'TEMPLATE_SET']);
+assert.strictEqual(props.WA_TOKEN, 'newtok');
+assert.notStrictEqual(props.INTERNAL_TOKEN, 'hijack');
+adm = post({ type: 'admin', token: props.INTERNAL_TOKEN, action: 'status' });
+assert(adm.properties.includes('WA_TOKEN') && !JSON.stringify(adm).includes('newtok'));
+console.log('✓ admin: auth, whitelist, no secret echo');
+
+// legacy template set: old approved names, [first name, time] params, same 3 payloads
+let k2 = sent.length;
+post({ type: 'admin', token: props.INTERNAL_TOKEN, action: 'testSend' });
+const lt = sent[k2];
+assert.strictEqual(lt.template.name, 'reminder_day_with_a_button');
+assert.strictEqual(lt.template.components[0].parameters.length, 2);
+assert.strictEqual(lt.template.components.length, 4);
+const evLeg = { eventId: 'G@google.com', startMs: NOW + 60 * MIN, name: 'גלעד', phone: '0571234567' };
+sync([evLeg], { windowStart: NOW, windowEnd: NOW + 48 * H });
+ctx.sendDueReminders();
+assert.strictEqual(sent[sent.length - 1].template.name, 'reminder_hour_butten');
+post({ type: 'admin', token: props.INTERNAL_TOKEN, set: { TEMPLATE_SET: 'default' } });
+console.log('✓ legacy template set');
 
 // phone helpers
 assert.strictEqual(ctx.normalizePhone_('050-123-4567'), '972501234567');

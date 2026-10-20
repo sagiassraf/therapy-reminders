@@ -2,6 +2,7 @@
  * Central reminder service.
  *  - doPost {type:'sync'}     from each therapist's connector script
  *  - doPost {type:'webhook'}  forwarded by the Cloudflare Worker (button taps / replies)
+ *  - doPost {type:'admin'}    operator tasks (set properties, test send, read log), INTERNAL_TOKEN
  *  - sendDueReminders()       every 5 minutes
  */
 
@@ -26,6 +27,28 @@ const ALERT_TEXT = {
   no_phone: '⚠️ לא נמצא איש קשר בשם הזה, לכן לא תישלח תזכורת. תקנו את שם הפגישה כך שיהיה זהה לשם באנשי הקשר',
 };
 
+// Reminder templates. Script property TEMPLATE_SET picks the set; 'legacy' uses older approved
+// templates (no therapist name) while new ones wait for Meta's review. Button order must match
+// the payloads in sendReminder_: 24h = confirm, cancel, reschedule; 1h = confirm, cancel, late.
+const TEMPLATE_SETS = {
+  default: {
+    reminder_24h: { name: 'reminder_24h', params: (a, c, d) => [firstName_(a.name), c.displayName, dayText_(d), timeText_(d)] },
+    reminder_1h: { name: 'reminder_1h', params: (a, c, d) => [firstName_(a.name), c.displayName, timeText_(d)] },
+  },
+  legacy: {
+    reminder_24h: { name: 'reminder_day_with_a_button', params: (a, c, d) => [firstName_(a.name), timeText_(d)] },
+    reminder_1h: { name: 'reminder_hour_butten', params: (a, c, d) => [firstName_(a.name), timeText_(d)] },
+  },
+};
+
+// Properties the admin endpoint may change.
+const ADMIN_KEYS = ['WA_TOKEN', 'WA_PHONE_ID', 'TEST_PHONE', 'TEMPLATE_SET', 'TEMPLATE_LANG', 'GRAPH_VERSION'];
+
+function templateFor_(kind) {
+  const set = PropertiesService.getScriptProperties().getProperty('TEMPLATE_SET') || 'default';
+  return (TEMPLATE_SETS[set] || TEMPLATE_SETS.default)[kind];
+}
+
 function onOpen() {
   SpreadsheetApp.getUi().createMenu('תזכורות')
     .addItem('הוספת מטפל/ת', 'addClient')
@@ -48,6 +71,7 @@ function doPost(e) {
   try {
     if (body.type === 'sync') return json_(handleSync_(body));
     if (body.type === 'webhook') return json_(handleWebhook_(body));
+    if (body.type === 'admin') return json_(handleAdmin_(body));
     return json_({ ok: false, error: 'unknown type' });
   } catch (err) {
     log_('ERROR', body.type + ': ' + (err.stack || err));
@@ -180,13 +204,11 @@ function sendDueReminders() {
   });
 }
 
-function sendReminder_(template, appt, client) {
+function sendReminder_(kind, appt, client) {
   const d = new Date(Number(appt.startMs));
-  const params = template === 'reminder_24h'
-    ? [firstName_(appt.name), client.displayName, dayText_(d), timeText_(d)]
-    : [firstName_(appt.name), client.displayName, timeText_(d)];
-  const buttons = template === 'reminder_24h' ? ['c', 'x', 'r'] : ['c', 'x', 'l'];
-  sendTemplate_(String(appt.phone), template, params, buttons.map(b => b + ':' + appt.id));
+  const tpl = templateFor_(kind);
+  const buttons = kind === 'reminder_24h' ? ['c', 'x', 'r'] : ['c', 'x', 'l'];
+  sendTemplate_(String(appt.phone), tpl.name, tpl.params(appt, client, d), buttons.map(b => b + ':' + appt.id));
 }
 
 // ---------------------------------------------------------------- webhook
@@ -313,8 +335,46 @@ function testSend() {
   const phone = normalizePhone_(PropertiesService.getScriptProperties().getProperty('TEST_PHONE'));
   if (!phone) throw new Error('Set TEST_PHONE in script properties first');
   const d = new Date(Date.now() + DAY);
-  const res = sendTemplate_(phone, 'reminder_24h', ['ישראל', 'דנה לוי', dayText_(d), timeText_(d)], ['c:test', 'x:test', 'r:test']);
+  const tpl = templateFor_('reminder_24h');
+  const res = sendTemplate_(phone, tpl.name, tpl.params({ name: 'ישראל' }, { displayName: 'דנה לוי' }, d),
+    ['c:test', 'x:test', 'r:test']);
   Logger.log(JSON.stringify(res));
+  return res;
+}
+
+// ---------------------------------------------------------------- admin (remote)
+
+/**
+ * Lets the operator manage the deployment without opening the editor:
+ *   {type:'admin', token, set:{WA_TOKEN:'...'}}   update whitelisted script properties
+ *   {type:'admin', token, action:'testSend'}       send the sample reminder to TEST_PHONE
+ *   {type:'admin', token, action:'log'}            last 20 Log rows
+ *   {type:'admin', token, action:'status'}         property names that are set + appointment counts
+ */
+function handleAdmin_(body) {
+  const props = PropertiesService.getScriptProperties();
+  const token = props.getProperty('INTERNAL_TOKEN');
+  if (!token || body.token !== token) return { ok: false, error: 'unauthorized' };
+
+  const updated = Object.keys(body.set || {}).filter(k => ADMIN_KEYS.includes(k));
+  updated.forEach(k => props.setProperty(k, String(body.set[k])));
+
+  const out = { ok: true, updated };
+  if (body.action === 'testSend') out.result = testSend();
+  if (body.action === 'log') {
+    out.log = loadTable_('Log').rows.slice(-20).map(r => [r.time, r.level, r.message]);
+  }
+  if (body.action === 'status') {
+    const all = props.getProperties();
+    out.properties = ADMIN_KEYS.filter(k => all[k]).concat(all.INTERNAL_TOKEN ? ['INTERNAL_TOKEN'] : []);
+    out.templateSet = all.TEMPLATE_SET || 'default';
+    out.appointments = {};
+    loadTable_('Appointments').rows.forEach(r => {
+      out.appointments[r.status] = (out.appointments[r.status] || 0) + 1;
+    });
+    out.clients = loadTable_('Clients').rows.map(c => ({ id: c.id, name: c.displayName, active: isActive_(c), lastSync: c.lastSync }));
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------- helpers
