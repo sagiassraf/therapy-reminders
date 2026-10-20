@@ -3,7 +3,8 @@
  */
 
 const TABLES = {
-  Clients: ['id', 'displayName', 'therapistPhone', 'secret', 'active', 'created', 'lastSync'],
+  // gender: 'm' / 'f' (empty = neutral "יודע/ת" wording)
+  Clients: ['id', 'displayName', 'therapistPhone', 'secret', 'active', 'created', 'lastSync', 'gender'],
   Appointments: ['id', 'clientId', 'eventId', 'startMs', 'start', 'name', 'phone', 'status',
     'firstSeen', 'sent24', 'sent1h', 'replyAt', 'updated'],
   Log: ['time', 'level', 'message'],

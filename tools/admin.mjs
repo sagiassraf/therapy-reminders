@@ -4,6 +4,8 @@
 //   npm run admin -- test                   send the sample reminder to TEST_PHONE
 //   npm run admin -- set KEY=VALUE ...      update script properties (whitelisted on the server)
 //   npm run admin -- push-token             copy WA_TOKEN from .env to the server
+//   npm run admin -- client ID KEY=VALUE    edit a therapist (displayName, therapistPhone, gender m/f, active)
+//   npm run admin -- headers                rewrite sheet header rows after columns were added
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -18,6 +20,15 @@ if (cmd === 'status' || cmd === 'log') body.action = cmd;
 else if (cmd === 'test') body.action = 'testSend';
 else if (cmd === 'set') body.set = Object.fromEntries(args.map(a => [a.slice(0, a.indexOf('=')), a.slice(a.indexOf('=') + 1)]));
 else if (cmd === 'push-token') body.set = { WA_TOKEN: env.WA_TOKEN };
+else if (cmd === 'headers') body.action = 'headers';
+else if (cmd === 'client') {
+  body.action = 'setClient';
+  body.id = args[0];
+  body.fields = Object.fromEntries(args.slice(1).map(a => {
+    const v = a.slice(a.indexOf('=') + 1);
+    return [a.slice(0, a.indexOf('=')), v === 'true' ? true : v === 'false' ? false : v];
+  }));
+}
 else {
   console.error('Usage: npm run admin -- status|log|test|push-token|set KEY=VALUE');
   process.exit(1);

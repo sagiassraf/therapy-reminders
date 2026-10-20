@@ -266,11 +266,12 @@ function handleReply_(from, status, apptId) {
   const client = findClient_(appt.clientId);
   const d = new Date(Number(appt.startMs));
   const when = `ביום ${dayText_(d)} בשעה ${timeText_(d)}`;
+  const g = (male, female, neutral) => gendered_(client, male, female, neutral);
   const replies = {
     confirmed: `תודה ${firstName_(appt.name)}, ההגעה אושרה ✅\nנתראה ${when}.`,
-    cancelled: `קיבלנו, הפגישה ${when} בוטלה. ${client.displayName} קיבל/ה עדכון.`,
-    reschedule: `קיבלנו 🙏 ${client.displayName} יחזור/תחזור אליך לתיאום מועד חדש.`,
-    late: `תודה על העדכון, ${client.displayName} יודע/ת שתגיע/י בעוד כמה דקות.`,
+    cancelled: `קיבלנו, הפגישה ${when} בוטלה. ${client.displayName} ${g('קיבל', 'קיבלה', 'קיבל/ה')} עדכון.`,
+    reschedule: `קיבלנו 🙏 ${client.displayName} ${g('יחזור', 'תחזור', 'יחזור/תחזור')} אליך לתיאום מועד חדש.`,
+    late: `תודה על העדכון! ${client.displayName} ${g('מעודכן', 'מעודכנת', 'מעודכן/ת')} 🙏`,
   };
   sendText_(from, replies[status]);
 
@@ -313,6 +314,10 @@ function addClient() {
     ui.alert('מספר הטלפון לא תקין.');
     return;
   }
+  const genderRes = ui.prompt('הוספת מטפל/ת', 'מטפל או מטפלת? הקלידו ז או נ (לניסוח ההודעות):', ui.ButtonSet.OK_CANCEL);
+  if (genderRes.getSelectedButton() !== ui.Button.OK) return;
+  const genderText = genderRes.getResponseText().trim();
+  const gender = genderText.startsWith('נ') ? 'f' : genderText.startsWith('ז') ? 'm' : '';
   const client = {
     id: randomId_(8),
     displayName: nameRes.getResponseText().trim(),
@@ -320,6 +325,7 @@ function addClient() {
     secret: randomId_(24),
     active: true,
     created: new Date(),
+    gender,
   };
   withLock_(() => {
     const table = loadTable_('Clients');
@@ -350,6 +356,8 @@ function testSend() {
  *   {type:'admin', token, action:'testSend'}       send the sample reminder to TEST_PHONE
  *   {type:'admin', token, action:'log'}            last 20 Log rows
  *   {type:'admin', token, action:'status'}         property names that are set + appointment counts
+ *   {type:'admin', token, action:'setClient', id, fields:{gender:'f'}}   edit a therapist row
+ *   {type:'admin', token, action:'headers'}        rewrite header rows after columns were added
  */
 function handleAdmin_(body) {
   const props = PropertiesService.getScriptProperties();
@@ -361,6 +369,25 @@ function handleAdmin_(body) {
 
   const out = { ok: true, updated };
   if (body.action === 'testSend') out.result = testSend();
+  if (body.action === 'headers') {
+    Object.keys(TABLES).forEach(name => {
+      ss_().getSheetByName(name).getRange(1, 1, 1, TABLES[name].length).setValues([TABLES[name]]).setFontWeight('bold');
+    });
+  }
+  if (body.action === 'setClient') {
+    const editable = ['displayName', 'therapistPhone', 'gender', 'active'];
+    out.client = withLock_(() => {
+      const t = loadTable_('Clients');
+      const c = t.rows.find(r => String(r.id) === String(body.id));
+      if (!c) return null;
+      Object.keys(body.fields || {}).filter(k => editable.includes(k)).forEach(k => {
+        c[k] = k === 'therapistPhone' ? normalizePhone_(body.fields[k]) : body.fields[k];
+      });
+      saveRow_(t, c);
+      return { id: c.id, displayName: c.displayName, gender: c.gender, active: isActive_(c) };
+    });
+    if (!out.client) return { ok: false, error: 'client not found' };
+  }
   if (body.action === 'log') {
     out.log = loadTable_('Log').rows.slice(-20).map(r => [r.time, r.level, r.message]);
   }
@@ -385,6 +412,14 @@ function dayText_(d) {
 
 function timeText_(d) {
   return Utilities.formatDate(d, TZ, 'HH:mm');
+}
+
+/** Therapist-gendered wording; clients' gender is unknown so client-facing verbs stay neutral. */
+function gendered_(client, male, female, neutral) {
+  const gender = String(client.gender || '').trim().toLowerCase();
+  if (gender === 'm' || gender === 'ז') return male;
+  if (gender === 'f' || gender === 'נ') return female;
+  return neutral;
 }
 
 function firstName_(name) {

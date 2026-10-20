@@ -276,6 +276,21 @@ adm = post({ type: 'admin', token: props.INTERNAL_TOKEN, action: 'status' });
 assert(adm.properties.includes('WA_TOKEN') && !JSON.stringify(adm).includes('newtok'));
 console.log('✓ admin: auth, whitelist, no secret echo');
 
+// gender: setClient via admin, reply wording follows it
+assert.strictEqual(post({ type: 'admin', token: props.INTERNAL_TOKEN, action: 'setClient', id: 'nope', fields: {} }).ok, false);
+adm = post({ type: 'admin', token: props.INTERNAL_TOKEN, action: 'setClient', id: 'kclient1', fields: { gender: 'f', secret: 'hack' } });
+assert.strictEqual(adm.client.gender, 'f');
+assert.strictEqual(ctx.findClient_('kclient1').secret, 'ksecret');
+assert.strictEqual(ctx.gendered_({ gender: 'f' }, 'יודע', 'יודעת', 'יודע/ת'), 'יודעת');
+assert.strictEqual(ctx.gendered_({ gender: 'm' }, 'יודע', 'יודעת', 'יודע/ת'), 'יודע');
+assert.strictEqual(ctx.gendered_({}, 'יודע', 'יודעת', 'יודע/ת'), 'יודע/ת');
+const evF = { eventId: 'F@google.com', startMs: NOW + 30 * H, name: 'שירה', phone: '0591234567' };
+sync([evF], { windowStart: NOW, windowEnd: NOW + 48 * H });
+let kf = sent.length;
+tap('972591234567', 'r:' + table('Appointments').find(x => x.eventId === 'F@google.com').id);
+assert.match(sent[kf].text.body, /דנה לוי תחזור אליך/);
+console.log('✓ therapist gender wording');
+
 // legacy template set: old approved names, [first name, time] params, same 3 payloads
 let k2 = sent.length;
 post({ type: 'admin', token: props.INTERNAL_TOKEN, action: 'testSend' });
