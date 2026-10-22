@@ -72,7 +72,8 @@ const ctx = {
     const body = JSON.parse(opt.payload);
     if (failNext) { failNext = false; return { getResponseCode: () => 400, getContentText: () => '{"error":"bad"}' }; }
     sent.push(body);
-    return { getResponseCode: () => 200, getContentText: () => '{"messages":[{"id":"wamid.x"}]}' };
+    const id = 'wamid.' + sent.length;
+    return { getResponseCode: () => 200, getContentText: () => JSON.stringify({ messages: [{ id }] }) };
   } },
   ContentService: { createTextOutput: s => ({ s, setMimeType() { return this; } }), MimeType: { JSON: 'json' } },
   Logger: { log: (...a) => console.log('  [Logger]', ...a) },
@@ -304,6 +305,85 @@ ctx.sendDueReminders();
 assert.strictEqual(sent[sent.length - 1].template.name, 'reminder_hour_butten');
 post({ type: 'admin', token: props.INTERNAL_TOKEN, set: { TEMPLATE_SET: 'default' } });
 console.log('✓ legacy template set');
+
+// ---- per-coach "warm" set: own templates, wrong-time button, ❤️ / typed confirmations ----
+const admin = extra => post(Object.assign({ type: 'admin', token: props.INTERNAL_TOKEN }, extra));
+const webhookMsg = msg => post({ type: 'webhook', token: props.INTERNAL_TOKEN,
+  payload: { entry: [{ changes: [{ value: { messages: [Object.assign({ id: 'in.' + Math.random() }, msg)] } }] }] } });
+const react = (from, message_id, emoji) => webhookMsg({ from, type: 'reaction', reaction: { message_id, emoji } });
+const say = (from, body) => webhookMsg({ from, type: 'text', text: { body } });
+const appt = eventId => table('Appointments').find(x => x.eventId === eventId);
+
+assert.strictEqual(admin({ action: 'setClient', id: 'kclient1', fields: { templateSet: 'nope' } }).ok, false);
+assert.strictEqual(admin({ action: 'setClient', id: 'kclient1', fields: { templateSet: 'warm' } }).client.templateSet, 'warm');
+
+const evW = { eventId: 'W@google.com', startMs: NOW + 30 * H, name: 'נועה כהן', phone: '0502223333' };
+const evHr = { eventId: 'HR@google.com', startMs: NOW + 50 * MIN, name: 'מיכל', phone: '0503334444' };
+sync([evW, evHr]);
+let kw = sent.length;
+ctx.sendDueReminders();
+const warm1h = sent[kw];
+assert.strictEqual(warm1h.template.name, 'coach_warm_1h');
+assert.strictEqual(warm1h.template.components.length, 1, 'warm 1h reminder has no buttons');
+assert.deepStrictEqual(warm1h.template.components[0].parameters.map(p => p.text), ['מיכל']);
+const msg1h = appt('HR@google.com').msg1h;
+assert.strictEqual(msg1h, 'wamid.' + (kw + 1), 'message id stored for reaction matching');
+
+kw = sent.length;
+react('972503334444', msg1h, '💔');
+assert.strictEqual(appt('HR@google.com').status, 'pending', 'broken heart is not a yes');
+react('972500000000', msg1h, '❤️');
+assert.strictEqual(appt('HR@google.com').status, 'pending', 'reaction from another phone ignored');
+react('972503334444', msg1h, '❤️');
+assert.strictEqual(appt('HR@google.com').status, 'confirmed');
+assert.strictEqual(sent.length, kw, 'a heart on the 1h reminder gets no reply');
+console.log('✓ warm 1h: no buttons, ❤️ reaction confirms silently, 💔 / other phone ignored');
+
+NOW = evW.startMs - 24 * H + MIN;
+kw = sent.length;
+ctx.sendDueReminders();
+const warm24 = sent[kw];
+assert.strictEqual(warm24.template.name, 'coach_warm_24h');
+const wId = appt('W@google.com').id;
+assert.deepStrictEqual(warm24.template.components[0].parameters.map(p => p.text)[0], 'נועה');
+assert.deepStrictEqual(warm24.template.components.slice(1).map(c => c.parameters[0].payload), ['c:' + wId, 'w:' + wId, 'r:' + wId]);
+
+kw = sent.length;
+say('972502223333', 'כן מגיעה, תודה!');
+assert.strictEqual(appt('W@google.com').status, 'confirmed');
+assert.strictEqual(sent[kw].text.body, 'מעולה! נתראה מחר🤍');
+say('972502223333', 'מגיעה');
+assert.strictEqual(sent.length, kw + 1, 'repeated yes: no second reply, no "not monitored" reply');
+console.log('✓ warm 24h: own template + payloads; typed "מגיעה" confirms with her reply');
+
+kw = sent.length;
+tap('972502223333', 'w:' + wId);
+assert.strictEqual(appt('W@google.com').status, 'wrong_time');
+assert.match(sent[kw].text.body, /אבדוק ואחזור אלייך/);
+assert.strictEqual(sent[kw + 1].template.name, 'therapist_alert');
+assert.match(sent[kw + 1].template.components[0].parameters[3].text, /אומרת שהשעה של הפגישה לא נכונה/);
+kw = sent.length;
+tap('972502223333', 'r:' + wId);
+assert.match(sent[kw].text.body, /אחזור אלייך בהקדם/);
+assert.match(sent[kw + 1].template.components[0].parameters[3].text, /מבקשת להזיז/);
+console.log('✓ warm buttons: wrong time ❓ and reschedule, with her wording and alerts');
+
+kw = sent.length;
+say('972503334444', 'לא מגיעה היום');
+assert.strictEqual(appt('HR@google.com').status, 'confirmed', '"לא מגיעה" is not a confirmation');
+assert.match(sent[kw].text.body, /מספר לתזכורות בלבד/);
+console.log('✓ "לא מגיעה" falls through to the not-monitored reply');
+
+assert.strictEqual(ctx.looksLikeConfirmation_('מגיעה'), true);
+assert.strictEqual(ctx.looksLikeConfirmation_('אין בעיה, מגיעה 🙂'), true);
+assert.strictEqual(ctx.looksLikeConfirmation_('❤️'), true);
+assert.strictEqual(ctx.looksLikeConfirmation_('👍🏽'), true);
+assert.strictEqual(ctx.looksLikeConfirmation_('💔'), false);
+assert.strictEqual(ctx.looksLikeConfirmation_('אולי אגיע'), false);
+assert.strictEqual(ctx.looksLikeConfirmation_('אני לא בטוחה שאני מגיעה'), false);
+assert.strictEqual(ctx.looksLikeConfirmation_('אפשר לדחות לחמש?'), false);
+admin({ action: 'setClient', id: 'kclient1', fields: { templateSet: '' } });
+console.log('✓ confirmation text detection');
 
 // phone helpers
 assert.strictEqual(ctx.normalizePhone_('050-123-4567'), '972501234567');

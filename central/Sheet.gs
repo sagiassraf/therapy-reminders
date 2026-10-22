@@ -4,9 +4,11 @@
 
 const TABLES = {
   // gender: 'm' / 'f' (empty = neutral "יודע/ת" wording)
-  Clients: ['id', 'displayName', 'therapistPhone', 'secret', 'active', 'created', 'lastSync', 'gender'],
+  // templateSet: key of TEMPLATE_SETS in Code.gs (empty = default)
+  Clients: ['id', 'displayName', 'therapistPhone', 'secret', 'active', 'created', 'lastSync', 'gender', 'templateSet'],
+  // msg24 / msg1h: WhatsApp message ids of the reminders, to match ❤️ reactions
   Appointments: ['id', 'clientId', 'eventId', 'startMs', 'start', 'name', 'phone', 'status',
-    'firstSeen', 'sent24', 'sent1h', 'replyAt', 'updated'],
+    'firstSeen', 'sent24', 'sent1h', 'replyAt', 'updated', 'msg24', 'msg1h'],
   Log: ['time', 'level', 'message'],
 };
 

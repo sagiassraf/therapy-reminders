@@ -17,36 +17,86 @@ const REMINDER_1H_WINDOW = 65 * MIN;
 // A booking made less than this before the meeting skips the day-before reminder.
 const MIN_LEAD_FOR_24H = 23 * H;
 
-// Quick-reply payload prefix -> appointment status. Button order per template:
-//   reminder_24h: confirm, cancel, reschedule     reminder_1h: confirm, cancel, late
-const REPLY_STATUS = { c: 'confirmed', x: 'cancelled', r: 'reschedule', l: 'late' };
+// Quick-reply payload prefix -> appointment status.
+const REPLY_STATUS = { c: 'confirmed', x: 'cancelled', r: 'reschedule', l: 'late', w: 'wrong_time' };
+// What the therapist is told ({{4}} of therapist_alert); a template set may override per status.
 const ALERT_TEXT = {
   cancelled: 'ביטל/ה את הפגישה ❌',
   reschedule: 'ביקש/ה לשנות מועד 🔄',
   late: 'מאחר/ת בכמה דקות ⏰',
+  wrong_time: 'אומר/ת שהשעה של הפגישה לא נכונה ❓',
   no_phone: '⚠️ לא נמצא איש קשר בשם הזה, לכן לא תישלח תזכורת. תקנו את שם הפגישה כך שיהיה זהה לשם באנשי הקשר',
 };
 
-// Reminder templates. Script property TEMPLATE_SET picks the set; 'legacy' uses older approved
-// templates (no therapist name) while new ones wait for Meta's review. Button order must match
-// the payloads in sendReminder_: 24h = confirm, cancel, reschedule; 1h = confirm, cancel, late.
+// What the client gets back after answering. ctx: {first, when, therapist, g(male, female, neutral)}.
+const DEFAULT_REPLIES = {
+  confirmed: x => `תודה ${x.first}, ההגעה אושרה ✅\nנתראה ${x.when}.`,
+  cancelled: x => `קיבלנו, הפגישה ${x.when} בוטלה. ${x.therapist} ${x.g('קיבל', 'קיבלה', 'קיבל/ה')} עדכון.`,
+  reschedule: x => `קיבלנו 🙏 ${x.therapist} ${x.g('יחזור', 'תחזור', 'יחזור/תחזור')} אליך לתיאום מועד חדש.`,
+  late: x => `תודה על העדכון! ${x.therapist} ${x.g('מעודכן', 'מעודכנת', 'מעודכן/ת')} 🙏`,
+  wrong_time: x => `תודה שעדכנת 🙏 ${x.therapist} ${x.g('יבדוק ויחזור', 'תבדוק ותחזור', 'יבדוק/תבדוק ויחזור/תחזור')} אליך עם השעה הנכונה.`,
+};
+
+// Template sets. A therapist's `templateSet` column picks one (script property TEMPLATE_SET is the
+// fallback). Each reminder lists the payload prefix of its quick-reply buttons in template order.
+// `replies` / `alerts` override the defaults; a reply set to null means "send nothing".
 const TEMPLATE_SETS = {
   default: {
-    reminder_24h: { name: 'reminder_24h', params: (a, c, d) => [firstName_(a.name), c.displayName, dayText_(d), timeText_(d)] },
-    reminder_1h: { name: 'reminder_1h', params: (a, c, d) => [firstName_(a.name), c.displayName, timeText_(d)] },
+    reminder_24h: { name: 'reminder_24h', buttons: ['c', 'x', 'r'],
+      params: (a, c, d) => [firstName_(a.name), c.displayName, dayText_(d), timeText_(d)] },
+    reminder_1h: { name: 'reminder_1h', buttons: ['c', 'x', 'l'],
+      params: (a, c, d) => [firstName_(a.name), c.displayName, timeText_(d)] },
   },
+  // Older approved templates without the therapist's name (used while new ones were in review).
   legacy: {
-    reminder_24h: { name: 'reminder_day_with_a_button', params: (a, c, d) => [firstName_(a.name), timeText_(d)] },
-    reminder_1h: { name: 'reminder_hour_butten', params: (a, c, d) => [firstName_(a.name), timeText_(d)] },
+    reminder_24h: { name: 'reminder_day_with_a_button', buttons: ['c', 'x', 'r'],
+      params: (a, c, d) => [firstName_(a.name), timeText_(d)] },
+    reminder_1h: { name: 'reminder_hour_butten', buttons: ['c', 'x', 'l'],
+      params: (a, c, d) => [firstName_(a.name), timeText_(d)] },
+  },
+  // Warm first-person wording for a coach whose clients are women. The 1h reminder has no
+  // buttons: the client confirms with a ❤️ reaction (or by typing "מגיעה").
+  warm: {
+    reminder_24h: { name: 'coach_warm_24h', buttons: ['c', 'w', 'r'],
+      params: (a, c, d) => [firstName_(a.name), timeText_(d)] },
+    reminder_1h: { name: 'coach_warm_1h', buttons: [],
+      params: a => [firstName_(a.name)] },
+    replies: {
+      confirmed: () => 'מעולה! נתראה מחר🤍',
+      confirmed_1h: null,
+      wrong_time: () => 'אוי, תודה שאמרת! 🙏 אבדוק ואחזור אלייך עם השעה הנכונה',
+      reschedule: () => 'בטח, אין בעיה 🤍 אחזור אלייך בהקדם לתיאום מועד חדש',
+    },
+    alerts: {
+      wrong_time: 'אומרת שהשעה של הפגישה לא נכונה ❓',
+      reschedule: 'מבקשת להזיז את הפגישה 🔄',
+    },
   },
 };
+
+// Reactions that mean "I'm coming": hearts, thumbs up, smiles... (💔 deliberately left out).
+const POSITIVE_REACTION = /[❣❤♥✅☺\u{1F493}\u{1F495}-\u{1F49F}\u{1F5A4}\u{1F90D}\u{1F90E}\u{1F9E1}\u{1FA75}-\u{1FA77}\u{1F600}\u{1F601}\u{1F60A}\u{1F60D}\u{1F618}\u{1F63B}\u{1F642}\u{1F917}\u{1F929}\u{1F970}\u{1F44C}\u{1F44D}\u{1F4AA}\u{1F64F}]/u;
+// Typed confirmations, accepted only when the message is short and has no word that says otherwise.
+const CONFIRM_WORDS = ['כן', 'בטח', 'סגור', 'סבבה', 'מעולה', 'מאשר', 'מאשרת', 'מגיע', 'מגיעה', 'אגיע', 'בדרך', 'נתראה', 'אוקיי', 'אוקי', 'ok', 'okay'];
+const DOUBT_WORDS = ['לא', 'אולי', 'מאחר', 'מאחרת', 'אאחר', 'לבטל', 'ביטול', 'להזיז', 'לדחות'];
 
 // Properties the admin endpoint may change.
 const ADMIN_KEYS = ['WA_TOKEN', 'WA_PHONE_ID', 'TEST_PHONE', 'TEMPLATE_SET', 'TEMPLATE_LANG', 'GRAPH_VERSION'];
 
-function templateFor_(kind) {
-  const set = PropertiesService.getScriptProperties().getProperty('TEMPLATE_SET') || 'default';
-  return (TEMPLATE_SETS[set] || TEMPLATE_SETS.default)[kind];
+function setFor_(client) {
+  const fallback = PropertiesService.getScriptProperties().getProperty('TEMPLATE_SET');
+  return TEMPLATE_SETS[client && client.templateSet] || TEMPLATE_SETS[fallback] || TEMPLATE_SETS.default;
+}
+
+function replyText_(set, key, ctx) {
+  const own = set.replies || {};
+  if (key in own) return own[key] ? own[key](ctx) : null;
+  if (key === 'confirmed_1h') return replyText_(set, 'confirmed', ctx);
+  return DEFAULT_REPLIES[key] ? DEFAULT_REPLIES[key](ctx) : null;
+}
+
+function alertText_(set, status) {
+  return (set.alerts && set.alerts[status]) || ALERT_TEXT[status];
 }
 
 function onOpen() {
@@ -157,13 +207,17 @@ function handleSync_(body) {
 }
 
 function alertUnmatched_(client, appt) {
+  alertTherapist_(client, appt, ALERT_TEXT.no_phone);
+}
+
+function alertTherapist_(client, appt, text) {
   if (!client.therapistPhone) return;
   const d = new Date(Number(appt.startMs));
   try {
     sendTemplate_(String(client.therapistPhone), 'therapist_alert',
-      [appt.name || 'ללא שם', dayText_(d), timeText_(d), ALERT_TEXT.no_phone], []);
+      [appt.name || 'ללא שם', dayText_(d), timeText_(d), text], []);
   } catch (err) {
-    log_('ERROR', `No-phone alert to ${client.displayName}: ${err.message}`);
+    log_('ERROR', `Alert to ${client.displayName}: ${err.message}`);
   }
 }
 
@@ -191,8 +245,10 @@ function sendDueReminders() {
       else return;
 
       try {
-        sendReminder_(field === 'sent24' ? 'reminder_24h' : 'reminder_1h', r, client);
+        const msgId = sendReminder_(field === 'sent24' ? 'reminder_24h' : 'reminder_1h', r, client);
         r[field] = new Date();
+        // Kept so a ❤️ reaction on this exact message can be matched back to the appointment.
+        r[field === 'sent24' ? 'msg24' : 'msg1h'] = msgId;
       } catch (err) {
         // Marked so we don't retry every 5 minutes; details are in the Log tab.
         r[field] = 'failed';
@@ -204,11 +260,13 @@ function sendDueReminders() {
   });
 }
 
+/** Sends one reminder and returns WhatsApp's message id. */
 function sendReminder_(kind, appt, client) {
   const d = new Date(Number(appt.startMs));
-  const tpl = templateFor_(kind);
-  const buttons = kind === 'reminder_24h' ? ['c', 'x', 'r'] : ['c', 'x', 'l'];
-  sendTemplate_(String(appt.phone), tpl.name, tpl.params(appt, client, d), buttons.map(b => b + ':' + appt.id));
+  const tpl = setFor_(client)[kind];
+  const res = sendTemplate_(String(appt.phone), tpl.name, tpl.params(appt, client, d),
+    tpl.buttons.map(b => b + ':' + appt.id));
+  return (res && res.messages && res.messages[0] && res.messages[0].id) || '';
 }
 
 // ---------------------------------------------------------------- webhook
@@ -239,11 +297,82 @@ function handleIncoming_(m) {
   if (m.type === 'button' && m.button) payload = m.button.payload || '';
   else if (m.type === 'interactive' && m.interactive && m.interactive.button_reply) payload = m.interactive.button_reply.id || '';
 
-  const match = /^([cxrl]):(\w+)$/.exec(payload);
-  if (match) {
-    handleReply_(m.from, REPLY_STATUS[match[1]], match[2]);
-  } else if (['text', 'audio', 'image', 'video', 'document'].includes(m.type)) {
-    replyNotMonitored_(m.from);
+  const match = /^([cxrlw]):(\w+)$/.exec(payload);
+  if (match) return handleReply_(m.from, REPLY_STATUS[match[1]], match[2]);
+
+  if (m.type === 'reaction' && m.reaction) return handleReaction_(m.from, m.reaction);
+  if (m.type === 'text' && m.text && looksLikeConfirmation_(m.text.body) && confirmLatest_(m.from)) return;
+
+  if (['text', 'audio', 'image', 'video', 'document'].includes(m.type)) replyNotMonitored_(m.from);
+}
+
+/** ❤️ (or 👍, 🙏...) on one of our reminders confirms that appointment. */
+function handleReaction_(from, reaction) {
+  const msgId = String(reaction.message_id || '');
+  if (!msgId || !reaction.emoji || !POSITIVE_REACTION.test(reaction.emoji)) return;  // removed, or not a "yes"
+  confirmFrom_(from,
+    rows => rows.find(r => r.msg24 === msgId || r.msg1h === msgId),
+    appt => appt.msg1h === msgId);
+}
+
+/** A typed "מגיעה" confirms the nearest upcoming appointment this client was reminded about. */
+function confirmLatest_(from) {
+  const now = Date.now();
+  return confirmFrom_(from,
+    rows => rows
+      .filter(r => (isSent_(r.sent24) || isSent_(r.sent1h)) && Number(r.startMs) > now - H)
+      .sort((a, b) => Number(a.startMs) - Number(b.startMs))[0],
+    appt => isSent_(appt.sent1h));
+}
+
+/**
+ * Marks the picked appointment confirmed (pending only) and answers per the therapist's set.
+ * Returns true when the message was about an appointment, so it gets no "not monitored" reply.
+ */
+function confirmFrom_(from, pick, isHourReminder) {
+  const result = withLock_(() => {
+    const t = loadTable_('Appointments');
+    const r = pick(t.rows.filter(x => String(x.phone) === String(from) && x.status !== 'deleted'));
+    if (!r) return null;
+    if (r.status !== 'pending') return { appt: r, changed: false };
+    Object.assign(r, { status: 'confirmed', replyAt: new Date(), updated: new Date() });
+    saveRow_(t, r);
+    return { appt: r, changed: true };
+  });
+  if (!result) return false;
+  if (!result.changed) return result.appt.status === 'confirmed';  // a repeated "yes" needs no answer
+  const client = findClient_(result.appt.clientId);
+  if (client) replyToClient_(from, result.appt, client, isHourReminder(result.appt) ? 'confirmed_1h' : 'confirmed');
+  return true;
+}
+
+function isSent_(v) {
+  return !!v && v !== 'failed';
+}
+
+function looksLikeConfirmation_(text) {
+  const raw = String(text || '').trim();
+  if (!raw || raw.length > 60) return false;
+  const words = raw.replace(/[֑-ׇ]/g, '').replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .trim().toLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length) return POSITIVE_REACTION.test(raw);  // emoji-only, e.g. "❤️"
+  if (words.length > 6 || words.some(w => DOUBT_WORDS.includes(w))) return false;
+  return words.some(w => CONFIRM_WORDS.includes(w));
+}
+
+function replyToClient_(from, appt, client, key) {
+  const d = new Date(Number(appt.startMs));
+  const text = replyText_(setFor_(client), key, {
+    first: firstName_(appt.name),
+    when: `ביום ${dayText_(d)} בשעה ${timeText_(d)}`,
+    therapist: client.displayName,
+    g: (male, female, neutral) => gendered_(client, male, female, neutral),
+  });
+  if (!text) return;
+  try {
+    sendText_(from, text);
+  } catch (err) {
+    log_('WARN', `Reply to ${from}: ${err.message}`);
   }
 }
 
@@ -264,25 +393,11 @@ function handleReply_(from, status, apptId) {
 
   const { appt, prev } = result;
   const client = findClient_(appt.clientId);
-  const d = new Date(Number(appt.startMs));
-  const when = `ביום ${dayText_(d)} בשעה ${timeText_(d)}`;
-  const g = (male, female, neutral) => gendered_(client, male, female, neutral);
-  const replies = {
-    confirmed: `תודה ${firstName_(appt.name)}, ההגעה אושרה ✅\nנתראה ${when}.`,
-    cancelled: `קיבלנו, הפגישה ${when} בוטלה. ${client.displayName} ${g('קיבל', 'קיבלה', 'קיבל/ה')} עדכון.`,
-    reschedule: `קיבלנו 🙏 ${client.displayName} ${g('יחזור', 'תחזור', 'יחזור/תחזור')} אליך לתיאום מועד חדש.`,
-    late: `תודה על העדכון! ${client.displayName} ${g('מעודכן', 'מעודכנת', 'מעודכן/ת')} 🙏`,
-  };
-  sendText_(from, replies[status]);
+  replyToClient_(from, appt, client, status);
 
   // The therapist hears about everything except a plain confirmation, once per change.
-  if (status === 'confirmed' || prev === status || !client.therapistPhone) return;
-  try {
-    sendTemplate_(String(client.therapistPhone), 'therapist_alert',
-      [appt.name, dayText_(d), timeText_(d), ALERT_TEXT[status]], []);
-  } catch (err) {
-    log_('ERROR', `Alert to ${client.displayName}: ${err.message}`);
-  }
+  if (status === 'confirmed' || prev === status) return;
+  alertTherapist_(client, appt, alertText_(setFor_(client), status));
 }
 
 /** The business number isn't read by anyone - point the client to their therapist (max once per 6h). */
@@ -336,14 +451,14 @@ function addClient() {
     '\n\nשלחו את הקוד למטפל/ת יחד עם קישור ההעתקה של גיליון המטפל.');
 }
 
-/** Sends a sample day-before reminder to the TEST_PHONE script property. */
-function testSend() {
+/** Sends a sample reminder (day-before by default) from a template set to TEST_PHONE. */
+function testSend(setName, kind) {
   const phone = normalizePhone_(PropertiesService.getScriptProperties().getProperty('TEST_PHONE'));
   if (!phone) throw new Error('Set TEST_PHONE in script properties first');
   const d = new Date(Date.now() + DAY);
-  const tpl = templateFor_('reminder_24h');
+  const tpl = setFor_({ templateSet: setName })[kind || 'reminder_24h'];
   const res = sendTemplate_(phone, tpl.name, tpl.params({ name: 'ישראל' }, { displayName: 'דנה לוי' }, d),
-    ['c:test', 'x:test', 'r:test']);
+    tpl.buttons.map(b => b + ':test'));
   Logger.log(JSON.stringify(res));
   return res;
 }
@@ -368,14 +483,16 @@ function handleAdmin_(body) {
   updated.forEach(k => props.setProperty(k, String(body.set[k])));
 
   const out = { ok: true, updated };
-  if (body.action === 'testSend') out.result = testSend();
+  if (body.action === 'testSend') out.result = testSend(body.templateSet, body.kind);
   if (body.action === 'headers') {
     Object.keys(TABLES).forEach(name => {
       ss_().getSheetByName(name).getRange(1, 1, 1, TABLES[name].length).setValues([TABLES[name]]).setFontWeight('bold');
     });
   }
   if (body.action === 'setClient') {
-    const editable = ['displayName', 'therapistPhone', 'gender', 'active'];
+    const editable = ['displayName', 'therapistPhone', 'gender', 'active', 'templateSet'];
+    const wantedSet = (body.fields || {}).templateSet;
+    if (wantedSet && !TEMPLATE_SETS[wantedSet]) return { ok: false, error: 'unknown template set: ' + wantedSet };
     out.client = withLock_(() => {
       const t = loadTable_('Clients');
       const c = t.rows.find(r => String(r.id) === String(body.id));
@@ -384,7 +501,7 @@ function handleAdmin_(body) {
         c[k] = k === 'therapistPhone' ? normalizePhone_(body.fields[k]) : body.fields[k];
       });
       saveRow_(t, c);
-      return { id: c.id, displayName: c.displayName, gender: c.gender, active: isActive_(c) };
+      return { id: c.id, displayName: c.displayName, gender: c.gender, active: isActive_(c), templateSet: c.templateSet || 'default' };
     });
     if (!out.client) return { ok: false, error: 'client not found' };
   }
@@ -399,7 +516,9 @@ function handleAdmin_(body) {
     loadTable_('Appointments').rows.forEach(r => {
       out.appointments[r.status] = (out.appointments[r.status] || 0) + 1;
     });
-    out.clients = loadTable_('Clients').rows.map(c => ({ id: c.id, name: c.displayName, active: isActive_(c), lastSync: c.lastSync }));
+    out.clients = loadTable_('Clients').rows.map(c => ({
+      id: c.id, name: c.displayName, active: isActive_(c), lastSync: c.lastSync, templateSet: c.templateSet || 'default',
+    }));
   }
   return out;
 }
