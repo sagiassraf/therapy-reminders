@@ -49,6 +49,7 @@ const ss = {
 const props = { WA_TOKEN: 'tok', WA_PHONE_ID: '123', TEST_PHONE: '0501112222' };
 const cache = {};
 const sent = [];
+const calls = []; // {url, auth} of every UrlFetch, to check which number/account was used
 let failNext = false;
 
 function formatDate(d, tz, pattern) {
@@ -72,6 +73,7 @@ const ctx = {
     const body = JSON.parse(opt.payload);
     if (failNext) { failNext = false; return { getResponseCode: () => 400, getContentText: () => '{"error":"bad"}' }; }
     sent.push(body);
+    calls.push({ url, auth: opt.headers && opt.headers.Authorization });
     const id = 'wamid.' + sent.length;
     return { getResponseCode: () => 200, getContentText: () => JSON.stringify({ messages: [{ id }] }) };
   } },
@@ -82,7 +84,7 @@ const ctx = {
   }) },
 };
 vm.createContext(ctx);
-for (const f of ['Code.gs', 'WhatsApp.gs', 'Sheet.gs']) vm.runInContext(fs.readFileSync(path.join(DIR, f), 'utf8'), ctx, { filename: f });
+for (const f of ['Code.gs', 'WhatsApp.gs', 'Sheet.gs', 'Templates.gs']) vm.runInContext(fs.readFileSync(path.join(DIR, f), 'utf8'), ctx, { filename: f });
 
 const post = body => JSON.parse(ctx.doPost({ postData: { contents: JSON.stringify(body) } }).s);
 const H = 3600e3, MIN = 60e3;
@@ -384,6 +386,38 @@ assert.strictEqual(ctx.looksLikeConfirmation_('אני לא בטוחה שאני �
 assert.strictEqual(ctx.looksLikeConfirmation_('אפשר לדחות לחמש?'), false);
 admin({ action: 'setClient', id: 'kclient1', fields: { templateSet: '' } });
 console.log('✓ confirmation text detection');
+
+// ---- therapist's own WhatsApp number (Coexistence) ----
+assert.strictEqual(admin({ action: 'connectWa', clientId: 'kclient1', secret: 'wrong', wabaId: 'w', phoneId: 'p', waToken: 't' }).ok, false);
+assert.strictEqual(admin({ action: 'connectWa', clientId: 'kclient1', secret: 'ksecret', wabaId: 'wabaC', phoneId: 'phoneC',
+  waToken: 'coachtok', display: '+972 50-111-2222' }).ok, true);
+const st = admin({ action: 'status' });
+assert.strictEqual(st.clients[0].ownNumber, '+972 50-111-2222');
+assert(!JSON.stringify(st).includes('coachtok'), 'status never exposes the token');
+
+const evO = { eventId: 'O@google.com', startMs: NOW + 50 * MIN, name: 'אור', phone: '0504445555' };
+sync([evO]);
+let kc = calls.length;
+ctx.sendDueReminders();
+assert(calls[kc].url.includes('/phoneC/messages') && calls[kc].auth === 'Bearer coachtok', 'reminder goes out from the coach number');
+
+kc = calls.length;
+tap('972504445555', 'x:' + appt('O@google.com').id);
+assert(calls[kc].url.includes('/phoneC/messages'), 'reply to the client from the coach number');
+assert(calls[kc + 1].url.includes('/123/messages'), 'alert to the therapist from the central number');
+
+kc = calls.length;
+post({ type: 'webhook', token: props.INTERNAL_TOKEN, payload: { entry: [{ changes: [{ value: {
+  metadata: { phone_number_id: 'phoneC' },
+  messages: [{ from: '972504445555', id: 'tx1', type: 'text', text: { body: 'אפשר לדבר?' } }] } }] }] } });
+assert.strictEqual(calls.length, kc, 'no auto-reply on the coach\'s own number - the coach reads it');
+
+kc = calls.length;
+const created = admin({ action: 'createTemplates', id: 'kclient1' });
+assert.deepStrictEqual(created.templates.map(t => t.name), ['reminder_24h', 'reminder_1h']);
+assert(calls.slice(kc).every(c => c.url.includes('/wabaC/message_templates') && c.auth === 'Bearer coachtok'));
+delete props.WA_CLIENT_kclient1;
+console.log('✓ own number: connect checks secret, reminders/replies from coach number, alerts from central, no auto-reply, templates on coach account');
 
 // phone helpers
 assert.strictEqual(ctx.normalizePhone_('050-123-4567'), '972501234567');

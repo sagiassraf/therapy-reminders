@@ -265,7 +265,7 @@ function sendReminder_(kind, appt, client) {
   const d = new Date(Number(appt.startMs));
   const tpl = setFor_(client)[kind];
   const res = sendTemplate_(String(appt.phone), tpl.name, tpl.params(appt, client, d),
-    tpl.buttons.map(b => b + ':' + appt.id));
+    tpl.buttons.map(b => b + ':' + appt.id), client);
   return (res && res.messages && res.messages[0] && res.messages[0].id) || '';
 }
 
@@ -280,7 +280,7 @@ function handleWebhook_(body) {
     const v = change.value || {};
     (v.messages || []).forEach(m => {
       try {
-        handleIncoming_(m);
+        handleIncoming_(m, v.metadata);
       } catch (err) {
         log_('ERROR', 'incoming ' + m.id + ': ' + (err.stack || err));
       }
@@ -292,7 +292,8 @@ function handleWebhook_(body) {
   return { ok: true };
 }
 
-function handleIncoming_(m) {
+/** `meta.phone_number_id` is the business number that received the message. */
+function handleIncoming_(m, meta) {
   let payload = '';
   if (m.type === 'button' && m.button) payload = m.button.payload || '';
   else if (m.type === 'interactive' && m.interactive && m.interactive.button_reply) payload = m.interactive.button_reply.id || '';
@@ -303,7 +304,10 @@ function handleIncoming_(m) {
   if (m.type === 'reaction' && m.reaction) return handleReaction_(m.from, m.reaction);
   if (m.type === 'text' && m.text && looksLikeConfirmation_(m.text.body) && confirmLatest_(m.from)) return;
 
-  if (['text', 'audio', 'image', 'video', 'document'].includes(m.type)) replyNotMonitored_(m.from);
+  // A therapist's own number is read by the therapist; only the central number auto-replies.
+  const toCentral = !meta || !meta.phone_number_id ||
+    meta.phone_number_id === PropertiesService.getScriptProperties().getProperty('WA_PHONE_ID');
+  if (toCentral && ['text', 'audio', 'image', 'video', 'document'].includes(m.type)) replyNotMonitored_(m.from);
 }
 
 /** ❤️ (or 👍, 🙏...) on one of our reminders confirms that appointment. */
@@ -370,7 +374,7 @@ function replyToClient_(from, appt, client, key) {
   });
   if (!text) return;
   try {
-    sendText_(from, text);
+    sendText_(from, text, client);
   } catch (err) {
     log_('WARN', `Reply to ${from}: ${err.message}`);
   }
@@ -473,6 +477,9 @@ function testSend(setName, kind) {
  *   {type:'admin', token, action:'status'}         property names that are set + appointment counts
  *   {type:'admin', token, action:'setClient', id, fields:{gender:'f'}}   edit a therapist row
  *   {type:'admin', token, action:'headers'}        rewrite header rows after columns were added
+ *   {type:'admin', token, action:'connectWa', clientId, secret, wabaId, phoneId, waToken, display}
+ *       store a therapist's own WhatsApp number (called by the Worker's /onboard; needs their secret)
+ *   {type:'admin', token, action:'createTemplates', id}   create their set's templates on that number
  */
 function handleAdmin_(body) {
   const props = PropertiesService.getScriptProperties();
@@ -505,6 +512,21 @@ function handleAdmin_(body) {
     });
     if (!out.client) return { ok: false, error: 'client not found' };
   }
+  if (body.action === 'connectWa') {
+    const client = findClient_(body.clientId);
+    if (!client || client.secret !== body.secret) return { ok: false, error: 'unauthorized client' };
+    if (!body.wabaId || !body.phoneId || !body.waToken) return { ok: false, error: 'missing WhatsApp details' };
+    props.setProperty('WA_CLIENT_' + client.id, JSON.stringify({
+      wabaId: String(body.wabaId), phoneId: String(body.phoneId), token: String(body.waToken), display: String(body.display || ''),
+    }));
+    log_('INFO', `${client.displayName} connected WhatsApp number ${body.display || body.phoneId}`);
+    out.client = { id: client.id, displayName: client.displayName };
+  }
+  if (body.action === 'createTemplates') {
+    const client = findClient_(body.id);
+    if (!client) return { ok: false, error: 'client not found' };
+    out.templates = createTemplatesFor_(client);
+  }
   if (body.action === 'log') {
     out.log = loadTable_('Log').rows.slice(-20).map(r => [r.time, r.level, r.message]);
   }
@@ -518,6 +540,7 @@ function handleAdmin_(body) {
     });
     out.clients = loadTable_('Clients').rows.map(c => ({
       id: c.id, name: c.displayName, active: isActive_(c), lastSync: c.lastSync, templateSet: c.templateSet || 'default',
+      ownNumber: (ownNumber_(c) || {}).display || null,
     }));
   }
   return out;

@@ -4,12 +4,22 @@
  *   WA_PHONE_ID    Phone number ID of the business number
  *   GRAPH_VERSION  optional, default v25.0
  *   TEMPLATE_LANG  optional, default he
+ *   WA_CLIENT_<id> set by the connect flow: {wabaId, phoneId, token, display} of a therapist's
+ *                  own WhatsApp Business number (Coexistence). Messages to that therapist's
+ *                  clients go out from it; everything else uses the central number above.
  */
 
-function waConfig_() {
+function ownNumber_(client) {
+  if (!client || !client.id) return null;
+  const raw = PropertiesService.getScriptProperties().getProperty('WA_CLIENT_' + client.id);
+  return raw ? JSON.parse(raw) : null;
+}
+
+function waConfig_(client) {
   const p = PropertiesService.getScriptProperties();
-  const token = p.getProperty('WA_TOKEN');
-  const phoneId = p.getProperty('WA_PHONE_ID');
+  const own = ownNumber_(client);
+  const token = own ? own.token : p.getProperty('WA_TOKEN');
+  const phoneId = own ? own.phoneId : p.getProperty('WA_PHONE_ID');
   if (!token || !phoneId) throw new Error('Missing WA_TOKEN or WA_PHONE_ID in script properties');
   return {
     token,
@@ -19,8 +29,9 @@ function waConfig_() {
   };
 }
 
-function waSend_(message) {
-  const cfg = waConfig_();
+/** `client` (optional) sends from that therapist's own number when one is connected. */
+function waSend_(message, client) {
+  const cfg = waConfig_(client);
   const res = UrlFetchApp.fetch(`https://graph.facebook.com/${cfg.version}/${cfg.phoneId}/messages`, {
     method: 'post',
     contentType: 'application/json',
@@ -38,7 +49,7 @@ function waSend_(message) {
  * Sends an approved template. `buttonPayloads` fills the template's quick-reply
  * buttons in order (index 0, 1, ...); pass [] for templates without buttons.
  */
-function sendTemplate_(phone, templateName, params, buttonPayloads) {
+function sendTemplate_(phone, templateName, params, buttonPayloads, client) {
   const components = [{
     type: 'body',
     parameters: params.map(t => ({ type: 'text', text: String(t) })),
@@ -54,13 +65,33 @@ function sendTemplate_(phone, templateName, params, buttonPayloads) {
   return waSend_({
     to: phone,
     type: 'template',
-    template: { name: templateName, language: { code: waConfig_().lang }, components },
-  });
+    template: { name: templateName, language: { code: waConfig_(client).lang }, components },
+  }, client);
 }
 
 /** Free-form text; only allowed within 24h of the client's last message to us. */
-function sendText_(phone, text) {
-  return waSend_({ to: phone, type: 'text', text: { preview_url: false, body: text } });
+function sendText_(phone, text, client) {
+  return waSend_({ to: phone, type: 'text', text: { preview_url: false, body: text } }, client);
+}
+
+/** Creates a template set's templates on a therapist's own WhatsApp account (see Templates.gs). */
+function createTemplatesFor_(client) {
+  const own = ownNumber_(client);
+  if (!own || !own.wabaId) throw new Error('No WhatsApp number connected for ' + client.id);
+  const defs = TEMPLATE_DEFS[client.templateSet || 'default'];
+  if (!defs) throw new Error('No template definitions for set ' + client.templateSet);
+  const version = PropertiesService.getScriptProperties().getProperty('GRAPH_VERSION') || 'v25.0';
+  return defs.map(def => {
+    const res = UrlFetchApp.fetch(`https://graph.facebook.com/${version}/${own.wabaId}/message_templates`, {
+      method: 'post',
+      contentType: 'application/json',
+      headers: { Authorization: 'Bearer ' + own.token },
+      payload: JSON.stringify(def),
+      muteHttpExceptions: true,
+    });
+    const body = JSON.parse(res.getContentText() || '{}');
+    return { name: def.name, status: body.status || (body.error && body.error.message) || res.getResponseCode() };
+  });
 }
 
 /** Any Israeli/international format -> digits with country code, e.g. 972501234567. '' if invalid. */
